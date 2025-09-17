@@ -1,0 +1,24 @@
+{
+  "name": "proof-submission",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "generate-proof": "node simple-proof-generator.js",
+    "generate-continuous": "node simple-proof-generator.js --continuous",
+    "submit-proof": "node index.js",
+    "automated-single": "node automated-pipeline-fixed.cjs",
+    "automated-continuous": "node automated-pipeline-fixed.cjs --continuous",
+    "automated-fast": "node automated-pipeline-fixed.cjs --continuous --interval 10"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "description": "",
+  "dependencies": {
+    "dotenv": "^17.2.2",
+    "snarkjs": "^0.7.5",
+    "zkverifyjs": "^0.19.0"
+  }
+}
