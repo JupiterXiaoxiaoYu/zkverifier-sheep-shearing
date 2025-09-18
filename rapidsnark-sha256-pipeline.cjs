@@ -31,6 +31,7 @@ class RapidsnarkSHA256Pipeline {
         
         // Fallback paths if cache doesn't exist
         this.fallbackZkeyPath = './k20/sha256_k20_0000.zkey';
+        this.downloadedZkeyPath = '/app/downloaded_files/sha256_k20_0000.zkey';
         
         // Ensure rapidsnark-prover has execute permissions
         this.ensureProverPermissions();
@@ -112,11 +113,38 @@ class RapidsnarkSHA256Pipeline {
                     return;
                     
                 } else if (stats.size < 1000) {
-                    // This is a Git LFS pointer file, not the actual binary
+                    // This is a Git LFS pointer file, check for downloaded file
                     const content = fs.readFileSync(this.fallbackZkeyPath, 'utf8');
                     console.log('❌ Git LFS pointer detected (file not downloaded):');
                     console.log(content.substring(0, 200));
-                    throw new Error('Git LFS file not downloaded. Run "git lfs pull" in build step.');
+                    
+                    // Check if we have a downloaded file from build process
+                    if (fs.existsSync(this.downloadedZkeyPath)) {
+                        const downloadedStats = fs.statSync(this.downloadedZkeyPath);
+                        console.log(`📥 Found downloaded file: ${downloadedStats.size} bytes`);
+                        
+                        if (downloadedStats.size === expectedSize) {
+                            console.log('✅ Downloaded file is correct, setting up cache...');
+                            
+                            // Ensure cache directory exists
+                            if (!fs.existsSync(this.cacheDir)) {
+                                fs.mkdirSync(this.cacheDir, { recursive: true });
+                                console.log(`📁 Created cache directory: ${this.cacheDir}`);
+                            }
+                            
+                            // Copy downloaded file to cache
+                            console.log('📥 Copying downloaded file to cache...');
+                            fs.copyFileSync(this.downloadedZkeyPath, this.zkeyPath);
+                            console.log('✅ Zkey file cached successfully from download');
+                            return;
+                        } else {
+                            console.log(`⚠️ Downloaded file wrong size: ${downloadedStats.size} vs expected ${expectedSize}`);
+                        }
+                    } else {
+                        console.log('❌ No downloaded file found at:', this.downloadedZkeyPath);
+                    }
+                    
+                    throw new Error('Git LFS file not downloaded and no valid downloaded file found. Check build process.');
                 } else {
                     console.log(`⚠️ Git LFS file wrong size: ${stats.size} vs expected ${expectedSize}`);
                     throw new Error(`Git LFS file corrupted or incomplete: ${stats.size} bytes`);
