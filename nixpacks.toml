@@ -1,5 +1,19 @@
 [phases.setup]
-nixPkgs = ['nodejs_18']
+nixPkgs = ['nodejs_18', 'git', 'git-lfs', 'curl']
 
 [phases.build]
-cmds = ['ls -la k20/sha256_k20_0000.zkey', 'chmod +x rapidsnark-prover']
+cmds = [
+  'echo "Current directory: $(pwd)"',
+  'echo "Git status:"',
+  'git status || echo "Not a git repo"',
+  'echo "Git LFS status:"', 
+  'git lfs env || echo "LFS not initialized"',
+  'echo "Installing Git LFS..."',
+  'git lfs install',
+  'echo "Pulling LFS files..."',
+  'git lfs pull || echo "LFS pull failed, trying fetch..."',
+  'git lfs fetch --all || echo "LFS fetch failed"',
+  'echo "Checking file after LFS pull:"',
+  'ls -la k20/sha256_k20_0000.zkey',
+  'chmod +x rapidsnark-prover'
+]
