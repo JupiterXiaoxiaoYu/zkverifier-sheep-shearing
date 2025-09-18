@@ -4,6 +4,17 @@ const fs = require("fs");
 
 dotenv.config();
 
+// Global error handlers to prevent crashes
+process.on('uncaughtException', (error) => {
+    console.error('❌ Uncaught Exception:', error.message || error);
+    console.log('🔄 Process will continue...');
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('❌ Unhandled Promise Rejection:', reason?.message || reason);
+    console.log('🔄 Process will continue...');
+});
+
 // Import simple-proof-generator functionality
 const snarkjs = require('snarkjs');
 
@@ -235,58 +246,126 @@ class AutomatedProofPipeline {
     }
 
     async submitProof() {
-        try {
-            console.log(`\n🔢 Submitting proof #${this.proofCount + 1}...`);
-            
-            // Generate new proof
-            const { proof, publicSignals, inputs } = await generateProof();
-            
-            // Read the saved proof files
-            const proofData = JSON.parse(fs.readFileSync("./data/proof.json"));
-            const publicInputs = JSON.parse(fs.readFileSync("./data/public.json"));
-            const vkey = JSON.parse(fs.readFileSync("./data/main.groth16.vkey.json"));
-            
-            // Submit to zkVerify
-            const { events } = await this.session.verify()
-                .groth16({library: Library.snarkjs, curve: CurveType.bn128})
-                .execute({
-                    proofData: {
-                        vk: vkey,
-                        proof: proofData,
-                        publicSignals: publicInputs
-                    }, 
-                    domainId: 0
+        const maxRetries = 3;
+        let retryCount = 0;
+        
+        while (retryCount < maxRetries) {
+            try {
+                console.log(`\n🔢 Submitting proof #${this.proofCount + 1}...${retryCount > 0 ? ` (retry ${retryCount})` : ''}`);
+                
+                // Generate new proof
+                const { proof, publicSignals, inputs } = await generateProof();
+                
+                // Read the saved proof files
+                const proofData = JSON.parse(fs.readFileSync("./data/proof.json"));
+                const publicInputs = JSON.parse(fs.readFileSync("./data/public.json"));
+                const vkey = JSON.parse(fs.readFileSync("./data/main.groth16.vkey.json"));
+                
+                // Submit to zkVerify with promise wrapper to catch async errors
+                const submissionPromise = new Promise(async (resolve, reject) => {
+                    try {
+                        const { events } = await this.session.verify()
+                            .groth16({library: Library.snarkjs, curve: CurveType.bn128})
+                            .execute({
+                                proofData: {
+                                    vk: vkey,
+                                    proof: proofData,
+                                    publicSignals: publicInputs
+                                }, 
+                                domainId: 0
+                            });
+
+                        // Handle submission events
+                        events.on(ZkVerifyEvents.IncludedInBlock, (eventData) => {
+                            console.log(`✅ Proof #${this.proofCount + 1} included in block:`, {
+                                statement: eventData.statement,
+                                aggregationId: eventData.aggregationId,
+                                inputs: inputs
+                            });
+                            
+                            // Save submission details
+                            const submissionData = {
+                                proofNumber: this.proofCount + 1,
+                                inputs: inputs,
+                                statement: eventData.statement,
+                                aggregationId: eventData.aggregationId,
+                                timestamp: new Date().toISOString(),
+                                publicSignals: publicInputs
+                            };
+                            
+                            fs.writeFileSync(
+                                `./data/submission_${this.proofCount + 1}.json`, 
+                                JSON.stringify(submissionData, null, 2)
+                            );
+                            
+                            resolve(true);
+                        });
+
+                        // Handle errors in events
+                        events.on('error', (error) => {
+                            reject(error);
+                        });
+
+                        // Set timeout for the submission
+                        setTimeout(() => {
+                            reject(new Error('Submission timeout after 20 seconds'));
+                        }, 20000);
+
+                    } catch (error) {
+                        reject(error);
+                    }
                 });
 
-            // Handle submission events
-            events.on(ZkVerifyEvents.IncludedInBlock, (eventData) => {
-                console.log(`✅ Proof #${this.proofCount + 1} included in block:`, {
-                    statement: eventData.statement,
-                    aggregationId: eventData.aggregationId,
-                    inputs: inputs
-                });
-                
-                // Save submission details
-                const submissionData = {
-                    proofNumber: this.proofCount + 1,
-                    inputs: inputs,
-                    statement: eventData.statement,
-                    aggregationId: eventData.aggregationId,
-                    timestamp: new Date().toISOString(),
-                    publicSignals: publicInputs
-                };
-                
-                fs.writeFileSync(
-                    `./data/submission_${this.proofCount + 1}.json`, 
-                    JSON.stringify(submissionData, null, 2)
-                );
-            });
+                // Wait for submission to complete
+                await submissionPromise;
 
-            this.proofCount++;
-            
-        } catch (error) {
-            console.error(`❌ Error submitting proof #${this.proofCount + 1}:`, error.message);
-            throw error;
+                this.proofCount++;
+                return; // Success, exit retry loop
+                
+            } catch (error) {
+                retryCount++;
+                let errorMessage = 'Unknown error';
+                if (error && typeof error === 'object') {
+                    errorMessage = error.message || JSON.stringify(error) || error.toString();
+                } else if (error) {
+                    errorMessage = error.toString();
+                }
+                console.error(`❌ Error submitting proof #${this.proofCount + 1} (attempt ${retryCount}):`, errorMessage);
+                
+                // Check for specific errors that should trigger retry
+                const shouldRetry = 
+                    errorMessage.includes('Priority is too low') ||
+                    errorMessage.includes('already in the pool') ||
+                    errorMessage.includes('disconnected') ||
+                    errorMessage.includes('Abnormal Closure') ||
+                    errorMessage.includes('Connection') ||
+                    errorMessage.includes('timeout') ||
+                    errorMessage.includes('1014:');
+                
+                if (shouldRetry && retryCount < maxRetries) {
+                    console.log(`⏳ Waiting 5 seconds before retry...`);
+                    await new Promise(resolve => setTimeout(resolve, 5000));
+                    
+                    // Try to reconnect session if it's a connection error
+                    if (errorMessage.includes('disconnected') || errorMessage.includes('Abnormal Closure')) {
+                        console.log('🔄 Attempting to reconnect session...');
+                        try {
+                            this.session = await zkVerifySession.start().Volta().withAccount(process.env.SEED_PHRASE);
+                            this.setupEventListeners();
+                            console.log('✅ Session reconnected successfully');
+                        } catch (reconnectError) {
+                            console.error('❌ Failed to reconnect session:', reconnectError?.message || reconnectError);
+                        }
+                    }
+                } else {
+                    // Either not a retryable error or max retries reached
+                    if (retryCount >= maxRetries) {
+                        console.error(`❌ Max retries (${maxRetries}) reached for proof #${this.proofCount + 1}`);
+                    }
+                    // Don't throw error, just log and continue with next proof
+                    break;
+                }
+            }
         }
     }
 
@@ -312,7 +391,9 @@ class AutomatedProofPipeline {
             try {
                 await this.submitProof();
             } catch (error) {
-                console.error('Error in continuous submission:', error);
+                const errorMessage = error?.message || error?.toString() || 'Unknown error';
+                console.error('❌ Error in continuous submission:', errorMessage);
+                console.log('🔄 Continuing with next proof submission...');
                 // Don't stop the pipeline on single errors
             }
         }, intervalSeconds * 1000);
