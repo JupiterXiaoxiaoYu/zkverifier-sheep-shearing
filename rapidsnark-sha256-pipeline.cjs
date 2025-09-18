@@ -26,6 +26,9 @@ class RapidsnarkSHA256Pipeline {
         this.wasmPath = './k20/sha256_k20_js/sha256_k20.wasm';
         this.verificationKeyPath = './k20/sha256_k20_vkey.json';
         
+        // Ensure rapidsnark-prover has execute permissions
+        this.ensureProverPermissions();
+        
         // Temporary file paths
         this.tempDir = '/tmp';
         
@@ -48,6 +51,20 @@ class RapidsnarkSHA256Pipeline {
         };
         
         this.loadVerificationKey();
+    }
+    
+    ensureProverPermissions() {
+        try {
+            // Check if prover exists and set execute permissions
+            if (fs.existsSync(this.proverPath)) {
+                fs.chmodSync(this.proverPath, 0o755);
+                console.log('✅ Rapidsnark prover permissions set to executable');
+            } else {
+                console.error('❌ Rapidsnark prover not found at:', this.proverPath);
+            }
+        } catch (error) {
+            console.error('⚠️ Failed to set prover permissions:', error.message);
+        }
     }
     
     loadVerificationKey() {
