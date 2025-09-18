@@ -1,19 +1,23 @@
 [phases.setup]
-nixPkgs = ['nodejs_18', 'git', 'git-lfs', 'curl']
+nixPkgs = ['nodejs_18', 'curl', 'wget']
 
 [phases.build]
 cmds = [
-  'echo "Current directory: $(pwd)"',
-  'echo "Git status:"',
-  'git status || echo "Not a git repo"',
-  'echo "Git LFS status:"', 
-  'git lfs env || echo "LFS not initialized"',
-  'echo "Installing Git LFS..."',
-  'git lfs install',
-  'echo "Pulling LFS files..."',
-  'git lfs pull || echo "LFS pull failed, trying fetch..."',
-  'git lfs fetch --all || echo "LFS fetch failed"',
-  'echo "Checking file after LFS pull:"',
+  'echo "=== Railway Git LFS Workaround ==="',
+  'echo "Railway不支持Git LFS，使用直接下载"',
+  'echo "检查当前zkey文件："',
   'ls -la k20/sha256_k20_0000.zkey',
-  'chmod +x rapidsnark-prover'
+  'echo "文件内容（应该是LFS指针）："',
+  'head -3 k20/sha256_k20_0000.zkey',
+  'echo "从GitHub LFS下载实际文件..."',
+  'curl -L "https://media.githubusercontent.com/media/JupiterXiaoxiaoYu/zkverify-sheep-shearing/main/k20/sha256_k20_0000.zkey" -o k20/sha256_k20_0000_temp.zkey --connect-timeout 30 --max-time 600 || echo "GitHub媒体下载失败"',
+  'echo "检查下载的文件："',
+  'ls -la k20/sha256_k20_0000_temp.zkey || echo "下载失败"',
+  'echo "验证文件大小："',
+  'if [ -f k20/sha256_k20_0000_temp.zkey ]; then SIZE=$(stat -c%s k20/sha256_k20_0000_temp.zkey); echo "下载文件大小: $SIZE 字节"; if [ $SIZE -gt 500000000 ]; then echo "文件大小正确，替换原文件"; mv k20/sha256_k20_0000_temp.zkey k20/sha256_k20_0000.zkey; else echo "文件太小，删除"; rm -f k20/sha256_k20_0000_temp.zkey; fi; fi',
+  'echo "最终文件检查："',
+  'ls -la k20/sha256_k20_0000.zkey',
+  'echo "设置可执行权限："',
+  'chmod +x rapidsnark-prover',
+  'echo "=== 构建完成 ==="'
 ]
