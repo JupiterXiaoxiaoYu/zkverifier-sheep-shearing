@@ -4,6 +4,7 @@ const { spawn } = require('child_process');
 const { zkVerifySession, Library, CurveType, ZkVerifyEvents } = require("zkverifyjs");
 const dotenv = require('dotenv');
 const HealthServer = require('./health-server.cjs');
+const CircuitDownloader = require('./download-circuit.cjs');
 
 dotenv.config();
 
@@ -67,6 +68,36 @@ class RapidsnarkSHA256Pipeline {
         }
     }
     
+    async ensureCircuitFiles() {
+        try {
+            console.log('🔍 Checking circuit files...');
+            
+            // Check if zkey file exists and has correct size
+            const expectedSize = 541519920; // 516MB
+            if (fs.existsSync(this.zkeyPath)) {
+                const stats = fs.statSync(this.zkeyPath);
+                if (stats.size === expectedSize) {
+                    console.log('✅ Circuit files already present and correct');
+                    return;
+                } else {
+                    console.log(`⚠️ zkey file wrong size: ${stats.size} vs expected ${expectedSize}`);
+                }
+            } else {
+                console.log('❌ zkey file missing');
+            }
+            
+            // Download circuit files if needed
+            console.log('📥 Downloading circuit files from backup source...');
+            const downloader = new CircuitDownloader();
+            await downloader.downloadAll();
+            await downloader.verify();
+            
+        } catch (error) {
+            console.error('❌ Failed to ensure circuit files:', error.message);
+            throw error;
+        }
+    }
+    
     loadVerificationKey() {
         try {
             const vkData = fs.readFileSync(this.verificationKeyPath, 'utf8');
@@ -99,6 +130,9 @@ class RapidsnarkSHA256Pipeline {
             }
             
             console.log(`🔑 Using seed phrase starting with: ${this.accountSeed.split(' ')[0]}...`);
+            
+            // Ensure circuit files are available (download if needed)
+            await this.ensureCircuitFiles();
             
             // Start health server for Railway monitoring
             this.healthServer.start();
