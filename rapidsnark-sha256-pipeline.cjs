@@ -3,6 +3,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { zkVerifySession, Library, CurveType, ZkVerifyEvents } = require("zkverifyjs");
 const dotenv = require('dotenv');
+const HealthServer = require('./health-server.cjs');
 
 dotenv.config();
 
@@ -34,6 +35,9 @@ class RapidsnarkSHA256Pipeline {
         this.derivedAccounts = [];
         this.accountCount = 8; // Number of parallel accounts
         
+        // Health server for Railway monitoring
+        this.healthServer = new HealthServer(process.env.PORT || 8080);
+        
         // Statistics
         this.stats = {
             totalAttempts: 0,
@@ -62,6 +66,9 @@ class RapidsnarkSHA256Pipeline {
     async initializeSession() {
         try {
             console.log('🚀 Initializing automated proof pipeline with 8 parallel accounts...');
+            
+            // Start health server for Railway monitoring
+            this.healthServer.start();
             
             // Initialize session with base account
             this.session = await zkVerifySession.start().Volta().withAccount(this.accountSeed);
@@ -454,6 +461,9 @@ class RapidsnarkSHA256Pipeline {
             const stats = this.stats.accountStats[address];
             console.log(`   Account ${index + 1} (${address.slice(0, 8)}...): ${stats.successful}/${stats.submitted} successful (${stats.submitted > 0 ? ((stats.successful / stats.submitted) * 100).toFixed(1) : 0}%)`);
         });
+        
+        // Update health server statistics
+        this.healthServer.updateProofStats(this.stats.totalAttempts, this.stats.successful, this.stats.failed);
     }
     
     async runContinuous(intervalSeconds = 30) {
@@ -502,7 +512,7 @@ class RapidsnarkSHA256Pipeline {
 
 // Main execution
 async function main() {
-    const pipeline = new RapidsnarkSHA256Pipeline();
+    pipeline = new RapidsnarkSHA256Pipeline();
     const args = process.argv.slice(2);
     
     // Initialize session and event listeners first
@@ -523,13 +533,21 @@ async function main() {
 }
 
 // Handle graceful shutdown
+let pipeline = null;
+
 process.on('SIGINT', () => {
     console.log('\n🛑 Received SIGINT. Shutting down gracefully...');
+    if (pipeline && pipeline.healthServer) {
+        pipeline.healthServer.stop();
+    }
     process.exit(0);
 });
 
 process.on('SIGTERM', () => {
     console.log('\n🛑 Received SIGTERM. Shutting down gracefully...');
+    if (pipeline && pipeline.healthServer) {
+        pipeline.healthServer.stop();
+    }
     process.exit(0);
 });
 
