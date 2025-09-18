@@ -1,19 +1,36 @@
 [phases.setup]
-nixPkgs = ['nodejs_18', 'git', 'git-lfs', 'curl']
+nixPkgs = ['nodejs_18', 'git', 'git-lfs', 'curl', 'wget']
 
 [phases.build]
 cmds = [
+  'echo "=== Railway Git LFS Debug & Recovery ==="',
   'echo "Current directory: $(pwd)"',
-  'echo "Git status:"',
-  'git status || echo "Not a git repo"',
-  'echo "Git LFS status:"', 
+  'echo "Git configuration:"',
+  'git config --list | grep -E "(user|lfs|filter)" || echo "No relevant git config"',
+  'echo "Git LFS environment:"',
   'git lfs env || echo "LFS not initialized"',
-  'echo "Installing Git LFS..."',
-  'git lfs install',
-  'echo "Pulling LFS files..."',
-  'git lfs pull || echo "LFS pull failed, trying fetch..."',
-  'git lfs fetch --all || echo "LFS fetch failed"',
-  'echo "Checking file after LFS pull:"',
+  'echo "Installing and configuring Git LFS..."',
+  'git lfs install --force',
+  'git lfs install --local --force',
+  'echo "Checking .gitattributes:"',
+  'cat .gitattributes || echo "No .gitattributes found"',
+  'echo "Git LFS track status:"',
+  'git lfs track || echo "No LFS tracking configured"',
+  'echo "Checking zkey file before LFS operations:"',
+  'ls -la k20/sha256_k20_0000.zkey || echo "zkey file not found"',
+  'file k20/sha256_k20_0000.zkey || echo "Cannot determine file type"',
+  'head -c 200 k20/sha256_k20_0000.zkey || echo "Cannot read file head"',
+  'echo "Attempting Git LFS operations..."',
+  'git lfs fetch --all',
+  'git lfs pull --include="*.zkey"',
+  'git lfs checkout',
+  'echo "Checking zkey file after LFS operations:"',
   'ls -la k20/sha256_k20_0000.zkey',
-  'chmod +x rapidsnark-prover'
+  'echo "File content check (should NOT show Git LFS pointer):"',
+  'head -c 200 k20/sha256_k20_0000.zkey',
+  'echo "File size validation:"',
+  'du -h k20/sha256_k20_0000.zkey',
+  'echo "Setting executable permissions:"',
+  'chmod +x rapidsnark-prover',
+  'echo "=== Build phase completed ==="'
 ]

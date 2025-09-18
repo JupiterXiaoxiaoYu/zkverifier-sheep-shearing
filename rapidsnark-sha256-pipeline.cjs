@@ -73,6 +73,63 @@ class RapidsnarkSHA256Pipeline {
         }
     }
     
+    async attemptGitLfsRecovery() {
+        return new Promise((resolve) => {
+            console.log('🔧 Attempting Git LFS recovery commands...');
+            
+            const { spawn } = require('child_process');
+            
+            // Try multiple Git LFS commands in sequence
+            const commands = [
+                ['git', ['lfs', 'install', '--force']],
+                ['git', ['lfs', 'fetch', '--all']],
+                ['git', ['lfs', 'pull', '--include=*.zkey']],
+                ['git', ['lfs', 'checkout']]
+            ];
+            
+            const runCommand = (cmd, args) => {
+                return new Promise((cmdResolve) => {
+                    console.log(`   Running: ${cmd} ${args.join(' ')}`);
+                    const process = spawn(cmd, args, { stdio: 'pipe' });
+                    
+                    let stdout = '';
+                    let stderr = '';
+                    
+                    process.stdout.on('data', (data) => {
+                        stdout += data.toString();
+                    });
+                    
+                    process.stderr.on('data', (data) => {
+                        stderr += data.toString();
+                    });
+                    
+                    process.on('close', (code) => {
+                        if (code === 0) {
+                            console.log(`   ✅ ${cmd} succeeded`);
+                        } else {
+                            console.log(`   ⚠️ ${cmd} failed with code ${code}: ${stderr.substring(0, 100)}`);
+                        }
+                        cmdResolve();
+                    });
+                    
+                    process.on('error', (error) => {
+                        console.log(`   ❌ ${cmd} error: ${error.message}`);
+                        cmdResolve();
+                    });
+                });
+            };
+            
+            // Run commands sequentially
+            (async () => {
+                for (const [cmd, args] of commands) {
+                    await runCommand(cmd, args);
+                }
+                console.log('🔧 Git LFS recovery attempts completed');
+                resolve();
+            })();
+        });
+    }
+    
     async ensureCircuitFiles() {
         try {
             console.log('🔍 Checking circuit files...');
@@ -116,7 +173,26 @@ class RapidsnarkSHA256Pipeline {
                     const content = fs.readFileSync(this.fallbackZkeyPath, 'utf8');
                     console.log('❌ Git LFS pointer detected (file not downloaded):');
                     console.log(content.substring(0, 200));
-                    throw new Error('Git LFS file not downloaded. Run "git lfs pull" in build step.');
+                    
+                    // Try Git LFS recovery first
+                    console.log('🔄 Attempting Git LFS recovery...');
+                    await this.attemptGitLfsRecovery();
+                    
+                    // Check if Git LFS recovery worked
+                    if (fs.existsSync(this.fallbackZkeyPath)) {
+                        const newStats = fs.statSync(this.fallbackZkeyPath);
+                        if (newStats.size === expectedSize) {
+                            console.log('✅ Git LFS recovery successful!');
+                            // Copy to cache
+                            if (!fs.existsSync(this.cacheDir)) {
+                                fs.mkdirSync(this.cacheDir, { recursive: true });
+                            }
+                            fs.copyFileSync(this.fallbackZkeyPath, this.zkeyPath);
+                            return;
+                        }
+                    }
+                    
+                    throw new Error('Git LFS file not downloaded and recovery failed. Please check Railway Git LFS configuration.');
                 } else {
                     console.log(`⚠️ Git LFS file wrong size: ${stats.size} vs expected ${expectedSize}`);
                     throw new Error(`Git LFS file corrupted or incomplete: ${stats.size} bytes`);
@@ -154,6 +230,29 @@ class RapidsnarkSHA256Pipeline {
             console.log(`   PORT: ${process.env.PORT}`);
             console.log(`   SEED_PHRASE exists: ${!!process.env.SEED_PHRASE}`);
             console.log(`   All env vars count: ${Object.keys(process.env).length}`);
+            
+            // Debug Git and LFS status in Railway
+            if (process.env.NODE_ENV === 'production') {
+                console.log('🔍 Railway Git LFS Debug:');
+                try {
+                    const { spawn } = require('child_process');
+                    
+                    const gitStatus = spawn('git', ['status', '--porcelain'], { stdio: 'pipe' });
+                    gitStatus.stdout.on('data', (data) => {
+                        console.log(`   Git status: ${data.toString().trim()}`);
+                    });
+                    
+                    const lfsStatus = spawn('git', ['lfs', 'ls-files'], { stdio: 'pipe' });
+                    lfsStatus.stdout.on('data', (data) => {
+                        console.log(`   LFS files: ${data.toString().trim()}`);
+                    });
+                    
+                    // Give a moment for git commands to complete
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                } catch (gitError) {
+                    console.log(`   Git debug failed: ${gitError.message}`);
+                }
+            }
             
             // Validate seed phrase before starting
             if (!this.accountSeed) {
