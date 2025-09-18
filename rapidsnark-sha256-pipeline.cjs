@@ -21,11 +21,17 @@ process.on('unhandledRejection', (reason, promise) => {
 
 class RapidsnarkSHA256Pipeline {
     constructor() {
-        // SHA256 circuit paths (k≈19.98, 1,031,716 constraints)
+        // Use Railway's persistent volume for caching large files
+        this.cacheDir = process.env.RAILWAY_VOLUME_MOUNT_PATH || './cache';
+        
+        // SHA256 circuit paths (k≈19.98, 1,031,716 constraints)  
         this.proverPath = './rapidsnark-prover';
-        this.zkeyPath = './k20/sha256_k20_0000.zkey';
+        this.zkeyPath = path.join(this.cacheDir, 'sha256_k20_0000.zkey');
         this.wasmPath = './k20/sha256_k20_js/sha256_k20.wasm';
         this.verificationKeyPath = './k20/sha256_k20_vkey.json';
+        
+        // Fallback paths if cache doesn't exist
+        this.fallbackZkeyPath = './k20/sha256_k20_0000.zkey';
         
         // Ensure rapidsnark-prover has execute permissions
         this.ensureProverPermissions();
@@ -71,26 +77,50 @@ class RapidsnarkSHA256Pipeline {
     async ensureCircuitFiles() {
         try {
             console.log('🔍 Checking circuit files...');
+            console.log(`📁 Cache directory: ${this.cacheDir}`);
             
-            // Check if zkey file exists and has correct size
+            // Ensure cache directory exists
+            if (!fs.existsSync(this.cacheDir)) {
+                fs.mkdirSync(this.cacheDir, { recursive: true });
+                console.log(`📁 Created cache directory: ${this.cacheDir}`);
+            }
+            
             const expectedSize = 541519920; // 516MB
+            
+            // Check cached zkey file first
             if (fs.existsSync(this.zkeyPath)) {
                 const stats = fs.statSync(this.zkeyPath);
                 if (stats.size === expectedSize) {
-                    console.log('✅ Circuit files already present and correct');
+                    console.log('✅ Cached zkey file found and verified');
                     return;
                 } else {
-                    console.log(`⚠️ zkey file wrong size: ${stats.size} vs expected ${expectedSize}`);
+                    console.log(`⚠️ Cached zkey file wrong size: ${stats.size} vs expected ${expectedSize}`);
+                    fs.unlinkSync(this.zkeyPath); // Remove corrupted cache
                 }
-            } else {
-                console.log('❌ zkey file missing');
             }
             
-            // Download circuit files if needed
-            console.log('📥 Downloading circuit files from backup source...');
-            const downloader = new CircuitDownloader();
-            await downloader.downloadAll();
-            await downloader.verify();
+            // Try to copy from fallback location to cache
+            if (fs.existsSync(this.fallbackZkeyPath)) {
+                const stats = fs.statSync(this.fallbackZkeyPath);
+                console.log(`📋 Fallback zkey file size: ${stats.size} bytes`);
+                
+                if (stats.size === expectedSize) {
+                    console.log('📥 Copying verified zkey file to cache...');
+                    fs.copyFileSync(this.fallbackZkeyPath, this.zkeyPath);
+                    console.log('✅ Zkey file cached successfully');
+                    return;
+                } else if (stats.size < 1000) {
+                    // Likely a Git LFS pointer file
+                    const content = fs.readFileSync(this.fallbackZkeyPath, 'utf8');
+                    console.log('⚠️ Git LFS pointer detected:');
+                    console.log(content.substring(0, 200));
+                    throw new Error('Git LFS file not properly downloaded. Railway needs Git LFS support.');
+                } else {
+                    console.log(`⚠️ Fallback zkey file wrong size: ${stats.size} vs expected ${expectedSize}`);
+                }
+            }
+            
+            throw new Error('No valid zkey file found in cache or fallback location');
             
         } catch (error) {
             console.error('❌ Failed to ensure circuit files:', error.message);
