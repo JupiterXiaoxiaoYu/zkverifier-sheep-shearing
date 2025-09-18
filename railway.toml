@@ -1,6 +1,5 @@
 [build]
 builder = "NIXPACKS"
-buildCommand = "git lfs pull && chmod +x rapidsnark-prover"
 
 [deploy]
 startCommand = "node rapidsnark-sha256-pipeline.cjs --continuous --interval 0"
