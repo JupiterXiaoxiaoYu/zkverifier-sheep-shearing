@@ -4,7 +4,6 @@ const { spawn } = require('child_process');
 const { zkVerifySession, Library, CurveType, ZkVerifyEvents } = require("zkverifyjs");
 const dotenv = require('dotenv');
 const HealthServer = require('./health-server.cjs');
-const CircuitDownloader = require('./download-circuit.cjs');
 
 dotenv.config();
 
@@ -79,15 +78,9 @@ class RapidsnarkSHA256Pipeline {
             console.log('🔍 Checking circuit files...');
             console.log(`📁 Cache directory: ${this.cacheDir}`);
             
-            // Ensure cache directory exists
-            if (!fs.existsSync(this.cacheDir)) {
-                fs.mkdirSync(this.cacheDir, { recursive: true });
-                console.log(`📁 Created cache directory: ${this.cacheDir}`);
-            }
-            
             const expectedSize = 541519920; // 516MB
             
-            // Check cached zkey file first
+            // Check if cached version exists first
             if (fs.existsSync(this.zkeyPath)) {
                 const stats = fs.statSync(this.zkeyPath);
                 if (stats.size === expectedSize) {
@@ -95,32 +88,42 @@ class RapidsnarkSHA256Pipeline {
                     return;
                 } else {
                     console.log(`⚠️ Cached zkey file wrong size: ${stats.size} vs expected ${expectedSize}`);
-                    fs.unlinkSync(this.zkeyPath); // Remove corrupted cache
                 }
             }
             
-            // Try to copy from fallback location to cache
+            // Check the Git LFS file
             if (fs.existsSync(this.fallbackZkeyPath)) {
                 const stats = fs.statSync(this.fallbackZkeyPath);
-                console.log(`📋 Fallback zkey file size: ${stats.size} bytes`);
+                console.log(`📋 Git LFS zkey file size: ${stats.size} bytes`);
                 
                 if (stats.size === expectedSize) {
-                    console.log('📥 Copying verified zkey file to cache...');
+                    console.log('✅ Git LFS file is correct, setting up cache...');
+                    
+                    // Ensure cache directory exists
+                    if (!fs.existsSync(this.cacheDir)) {
+                        fs.mkdirSync(this.cacheDir, { recursive: true });
+                        console.log(`📁 Created cache directory: ${this.cacheDir}`);
+                    }
+                    
+                    // Copy to cache for faster access next time
+                    console.log('📥 Copying Git LFS file to cache...');
                     fs.copyFileSync(this.fallbackZkeyPath, this.zkeyPath);
                     console.log('✅ Zkey file cached successfully');
                     return;
+                    
                 } else if (stats.size < 1000) {
-                    // Likely a Git LFS pointer file
+                    // This is a Git LFS pointer file, not the actual binary
                     const content = fs.readFileSync(this.fallbackZkeyPath, 'utf8');
-                    console.log('⚠️ Git LFS pointer detected:');
+                    console.log('❌ Git LFS pointer detected (file not downloaded):');
                     console.log(content.substring(0, 200));
-                    throw new Error('Git LFS file not properly downloaded. Railway needs Git LFS support.');
+                    throw new Error('Git LFS file not downloaded. Run "git lfs pull" in build step.');
                 } else {
-                    console.log(`⚠️ Fallback zkey file wrong size: ${stats.size} vs expected ${expectedSize}`);
+                    console.log(`⚠️ Git LFS file wrong size: ${stats.size} vs expected ${expectedSize}`);
+                    throw new Error(`Git LFS file corrupted or incomplete: ${stats.size} bytes`);
                 }
+            } else {
+                throw new Error(`Git LFS file missing: ${this.fallbackZkeyPath}`);
             }
-            
-            throw new Error('No valid zkey file found in cache or fallback location');
             
         } catch (error) {
             console.error('❌ Failed to ensure circuit files:', error.message);
