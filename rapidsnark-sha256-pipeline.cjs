@@ -67,8 +67,17 @@ class RapidsnarkSHA256Pipeline {
         try {
             console.log('🚀 Initializing automated proof pipeline with 8 parallel accounts...');
             
+            // Debug environment variables
+            console.log('🔍 Environment debug:');
+            console.log(`   NODE_ENV: ${process.env.NODE_ENV}`);
+            console.log(`   PORT: ${process.env.PORT}`);
+            console.log(`   SEED_PHRASE exists: ${!!process.env.SEED_PHRASE}`);
+            console.log(`   All env vars count: ${Object.keys(process.env).length}`);
+            
             // Validate seed phrase before starting
             if (!this.accountSeed) {
+                console.error('❌ SEED_PHRASE is undefined');
+                console.error('📋 Available environment variables:', Object.keys(process.env).filter(k => !k.includes('PATH')).slice(0, 10));
                 throw new Error('SEED_PHRASE environment variable is not set. Please configure it in Railway dashboard.');
             }
             
