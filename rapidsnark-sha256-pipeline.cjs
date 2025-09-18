@@ -67,6 +67,13 @@ class RapidsnarkSHA256Pipeline {
         try {
             console.log('🚀 Initializing automated proof pipeline with 8 parallel accounts...');
             
+            // Validate seed phrase before starting
+            if (!this.accountSeed) {
+                throw new Error('SEED_PHRASE environment variable is not set. Please configure it in Railway dashboard.');
+            }
+            
+            console.log(`🔑 Using seed phrase starting with: ${this.accountSeed.split(' ')[0]}...`);
+            
             // Start health server for Railway monitoring
             this.healthServer.start();
             
