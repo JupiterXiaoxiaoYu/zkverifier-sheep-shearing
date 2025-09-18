@@ -1,5 +1,5 @@
 [phases.setup]
-nixPkgs = ['nodejs_18', 'npm', 'git-lfs']
+nixPkgs = ['nodejs_18', 'git-lfs']
 
 [phases.build]
 cmds = ['git lfs pull', 'chmod +x rapidsnark-prover']
