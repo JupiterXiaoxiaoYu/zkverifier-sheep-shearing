@@ -485,6 +485,7 @@ class RapidsnarkSHA256Pipeline {
                     errorMessage.includes('Abnormal Closure') ||
                     errorMessage.includes('Connection') ||
                     errorMessage.includes('timeout') ||
+                    errorMessage.includes('not found in session') ||
                     errorMessage.includes('1014:');
                 
                 if (shouldRetry && retryCount < maxRetries) {
@@ -492,12 +493,11 @@ class RapidsnarkSHA256Pipeline {
                     await new Promise(resolve => setTimeout(resolve, 5000));
                     
                     // Try to reconnect session if it's a connection error
-                    if (errorMessage.includes('disconnected') || errorMessage.includes('Abnormal Closure')) {
-                        console.log('🔄 Attempting to reconnect session...');
+                    if (errorMessage.includes('disconnected') || errorMessage.includes('Abnormal Closure') || errorMessage.includes('not found in session')) {
+                        console.log('🔄 Attempting to reconnect session with derived accounts...');
                         try {
-                            this.session = await zkVerifySession.start().Volta().withAccount(this.accountSeed);
-                            this.setupEventListeners();
-                            console.log('✅ Session reconnected successfully');
+                            await this.reconnectSessionWithDerivedAccounts();
+                            console.log('✅ Session and derived accounts reconnected successfully');
                         } catch (reconnectError) {
                             console.error('❌ Failed to reconnect session:', reconnectError?.message || reconnectError);
                         }
@@ -621,9 +621,10 @@ class RapidsnarkSHA256Pipeline {
                 return { accountIndex, success: true, submitTime, totalTime };
             }).catch((error) => {
                 const submitTime = Date.now() - submitStart;
-                console.log(`❌ [${new Date().toLocaleTimeString()}] [${batchId}] Async submit failed for account ${accountIndex + 1} (${submitTime}ms): ${error.message}`);
+                const errorMessage = error?.message || JSON.stringify(error) || error.toString();
+                console.log(`❌ [${new Date().toLocaleTimeString()}] [${batchId}] Async submit failed for account ${accountIndex + 1} (${submitTime}ms): ${errorMessage}`);
                 this.stats.accountStats[accountAddress].failed++;
-                return { accountIndex, success: false, error: error.message, submitTime };
+                return { accountIndex, success: false, error: errorMessage, submitTime };
             });
             
             const proofGenerationTime = Date.now() - startTime;
@@ -722,6 +723,38 @@ class RapidsnarkSHA256Pipeline {
         
         // Update health server statistics
         this.healthServer.updateProofStats(this.stats.totalAttempts, this.stats.successful, this.stats.failed);
+    }
+    
+    async reconnectSessionWithDerivedAccounts() {
+        try {
+            console.log('🔄 Reconnecting session and restoring derived accounts...');
+            
+            // Reconnect base session
+            this.session = await zkVerifySession.start().Volta().withAccount(this.accountSeed);
+            
+            // Get base account address
+            const accountInfo = await this.session.getAccountInfo();
+            const baseAddress = accountInfo[0].address;
+            
+            // Re-derive all accounts
+            console.log(`🔄 Re-deriving ${this.accountCount - 1} accounts...`);
+            const derivedAddresses = await this.session.addDerivedAccounts(baseAddress, this.accountCount - 1);
+            
+            // Update the derived accounts array
+            this.derivedAccounts = [baseAddress, ...derivedAddresses];
+            
+            // Setup event listeners
+            this.setupEventListeners();
+            
+            console.log(`✅ Session reconnected with ${this.derivedAccounts.length} accounts`);
+            this.derivedAccounts.forEach((address, index) => {
+                console.log(`   Account ${index + 1}: ${address}`);
+            });
+            
+        } catch (error) {
+            console.error('❌ Failed to reconnect session with derived accounts:', error.message);
+            throw error;
+        }
     }
     
     async monitorAsyncSubmissions(submitPromises, cycleStartTime) {
