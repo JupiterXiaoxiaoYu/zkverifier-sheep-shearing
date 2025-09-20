@@ -491,8 +491,11 @@ class RapidsnarkSHA256Pipeline {
                     errorMessage.includes('1014:');
                 
                 if (shouldRetry && retryCount < maxRetries) {
-                    console.log(`⏳ Waiting 5 seconds before retry...`);
-                    await new Promise(resolve => setTimeout(resolve, 5000));
+                    // Priority is too low错误使用3秒间隔，其他错误使用5秒
+                    const retryDelay = errorMessage.includes('Priority is too low') ? 3000 : 5000;
+                    const delayText = errorMessage.includes('Priority is too low') ? '3 seconds' : '5 seconds';
+                    console.log(`⏳ Waiting ${delayText} before retry...`);
+                    await new Promise(resolve => setTimeout(resolve, retryDelay));
                     
                     // Try to reconnect session if it's a connection error
                     if (errorMessage.includes('disconnected') || errorMessage.includes('Abnormal Closure') || errorMessage.includes('not found in session')) {
