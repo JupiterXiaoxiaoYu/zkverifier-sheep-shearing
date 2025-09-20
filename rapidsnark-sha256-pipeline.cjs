@@ -43,7 +43,7 @@ class RapidsnarkSHA256Pipeline {
         this.session = null;
         this.accountSeed = process.env.SEED_PHRASE;
         this.derivedAccounts = [];
-        this.accountCount = 8; // Number of parallel accounts
+        this.accountCount = 8; // Account 1 does triple proof, others do single proof
         
         // Health server for Railway monitoring
         this.healthServer = new HealthServer(process.env.PORT || 8080);
@@ -213,9 +213,10 @@ class RapidsnarkSHA256Pipeline {
             // Store all account addresses (base + derived)
             this.derivedAccounts = [baseAddress, ...derivedAddresses];
             
-            console.log(`✅ ${this.derivedAccounts.length} accounts ready for parallel processing:`);
+            console.log(`✅ ${this.derivedAccounts.length} accounts ready - Account 1 triple proof, others single proof:`);
             this.derivedAccounts.forEach((address, index) => {
-                console.log(`   Account ${index + 1}: ${address}`);
+                const mode = index === 0 ? '(triple proof)' : '(single proof)';
+                console.log(`   Account ${index + 1}: ${address} ${mode}`);
                 this.stats.accountStats[address] = { submitted: 0, successful: 0, failed: 0 };
             });
             
@@ -417,8 +418,7 @@ class RapidsnarkSHA256Pipeline {
                                 inputSummary: mockInputSummary
                             });
                             
-                            // Update account-specific stats
-                            this.stats.accountStats[accountAddress].successful++;
+                            // Note: Account-specific stats updated in monitorAsyncSubmissions
                             
                             // Save submission details
                             try {
@@ -578,13 +578,12 @@ class RapidsnarkSHA256Pipeline {
     
     async runSingleProofCycleAsync(accountIndex, batchId = '') {
         const accountAddress = this.derivedAccounts[accountIndex];
-        this.stats.accountStats[accountAddress].submitted++;
         
         try {
             const startTime = Date.now();
-            console.log(`\n🔄 [${new Date().toLocaleTimeString()}] Starting SHA256 proof for account ${accountIndex + 1} (${accountAddress.slice(0, 8)}...) [${batchId}]`);
+            console.log(`\n🔄 [${new Date().toLocaleTimeString()}] Starting single SHA256 proof for account ${accountIndex + 1} (${accountAddress.slice(0, 8)}...) [${batchId}]`);
             
-            // Step 1: Generate random input for SHA256
+            // Generate random input for SHA256
             const randomInput = this.generateRandomSHA256Input();
             const inputSummary = {
                 totalBits: randomInput.length,
@@ -595,45 +594,43 @@ class RapidsnarkSHA256Pipeline {
             
             console.log(`🎲 Generated random ${randomInput.length}-bit input for account ${accountIndex + 1}: ${inputSummary.onesCount} ones, ${inputSummary.zerosCount} zeros`);
             
-            // Step 2: Generate witness
+            // Generate witness
             const witnessStart = Date.now();
             console.log(`🔧 [${new Date().toLocaleTimeString()}] [${batchId}] Witness generation phase for account ${accountIndex + 1}`);
             await this.generateWitnessWithSnarkjs(randomInput, accountIndex);
             const witnessTime = Date.now() - witnessStart;
             console.log(`✅ [${new Date().toLocaleTimeString()}] [${batchId}] Witness completed for account ${accountIndex + 1} (${witnessTime}ms)`);
             
-            // Step 3: Generate proof with rapidsnark  
+            // Generate proof with rapidsnark  
             const proofStart = Date.now();
             console.log(`⚡ [${new Date().toLocaleTimeString()}] [${batchId}] Proof generation phase for account ${accountIndex + 1}`);
             const { proof, publicInputs } = await this.generateProofWithRapidsnark(accountIndex);
             const proofTime = Date.now() - proofStart;
             console.log(`✅ [${new Date().toLocaleTimeString()}] [${batchId}] Proof completed for account ${accountIndex + 1} (${proofTime}ms)`);
             
-            // Step 4: Submit proof asynchronously (不等待结果)
+            // Submit proof asynchronously
             const submitStart = Date.now();
-            console.log(`📤 [${new Date().toLocaleTimeString()}] [${batchId}] Proof submission initiated for account ${accountIndex + 1} (async)`);
+            console.log(`📤 [${new Date().toLocaleTimeString()}] [${batchId}] Proof submission initiated for account ${accountIndex + 1}`);
             
             const submitPromise = this.submitProof(proof, publicInputs, inputSummary, accountAddress, accountIndex).then(() => {
                 const submitTime = Date.now() - submitStart;
-                const totalTime = Date.now() - startTime;
-                console.log(`✅ [${new Date().toLocaleTimeString()}] [${batchId}] Async submit completed for account ${accountIndex + 1} (${submitTime}ms)`);
-                console.log(`⏱️ [${batchId}] Final timing - Witness: ${witnessTime}ms, Proof: ${proofTime}ms, Submit: ${submitTime}ms, Total: ${totalTime}ms`);
-                return { accountIndex, success: true, submitTime, totalTime };
+                console.log(`✅ [${new Date().toLocaleTimeString()}] [${batchId}] Proof submit completed for account ${accountIndex + 1} (${submitTime}ms)`);
+                return { accountIndex, proofType: 'Single', success: true, submitTime };
             }).catch((error) => {
                 const submitTime = Date.now() - submitStart;
                 const errorMessage = error?.message || JSON.stringify(error) || error.toString();
-                console.log(`❌ [${new Date().toLocaleTimeString()}] [${batchId}] Async submit failed for account ${accountIndex + 1} (${submitTime}ms): ${errorMessage}`);
-                this.stats.accountStats[accountAddress].failed++;
-                return { accountIndex, success: false, error: errorMessage, submitTime };
+                console.log(`❌ [${new Date().toLocaleTimeString()}] [${batchId}] Proof submit failed for account ${accountIndex + 1}: ${errorMessage}`);
+                return { accountIndex, proofType: 'Single', success: false, error: errorMessage, submitTime };
             });
             
             const proofGenerationTime = Date.now() - startTime;
-            console.log(`🚀 [${new Date().toLocaleTimeString()}] [${batchId}] Proof generation completed for account ${accountIndex + 1} (${proofGenerationTime}ms) - submit running async`);
+            console.log(`🚀 [${new Date().toLocaleTimeString()}] [${batchId}] Single proof generation completed for account ${accountIndex + 1} (${proofGenerationTime}ms)`);
+            console.log(`⏱️ [${batchId}] Timing - Witness: ${witnessTime}ms, Proof: ${proofTime}ms, Total: ${proofGenerationTime}ms`);
             
-            return { submitPromise };
+            // Return submit promise for monitoring
+            return submitPromise;
             
         } catch (error) {
-            this.stats.accountStats[accountAddress].failed++;
             let errorMessage;
             
             try {
@@ -642,63 +639,206 @@ class RapidsnarkSHA256Pipeline {
                 errorMessage = 'Unknown error occurred';
             }
             
-            console.error(`❌ SHA256 proof cycle failed for account ${accountIndex + 1}: ${errorMessage}\n`);
+            console.error(`❌ Single SHA256 proof cycle failed for account ${accountIndex + 1}: ${errorMessage}\n`);
+            throw error;
+        }
+    }
+    
+    async runTripleProofCycleAsync(accountIndex, batchId = '') {
+        const accountAddress = this.derivedAccounts[accountIndex];
+        this.stats.accountStats[accountAddress].submitted += 3; // 三个proof
+        
+        try {
+            const startTime = Date.now();
+            console.log(`\n🔄 [${new Date().toLocaleTimeString()}] Starting TRIPLE SHA256 proofs for account ${accountIndex + 1} (${accountAddress.slice(0, 8)}...) [${batchId}]`);
+            
+            // 生成三个不同的随机输入
+            const randomInput1 = this.generateRandomSHA256Input();
+            const randomInput2 = this.generateRandomSHA256Input();
+            const randomInput3 = this.generateRandomSHA256Input();
+            
+            const inputSummary1 = {
+                totalBits: randomInput1.length,
+                onesCount: randomInput1.filter(bit => bit === 1).length,
+                zerosCount: randomInput1.filter(bit => bit === 0).length,
+                firstBytes: randomInput1.slice(0, 32).join('')
+            };
+            
+            const inputSummary2 = {
+                totalBits: randomInput2.length,
+                onesCount: randomInput2.filter(bit => bit === 1).length,
+                zerosCount: randomInput2.filter(bit => bit === 0).length,
+                firstBytes: randomInput2.slice(0, 32).join('')
+            };
+            
+            const inputSummary3 = {
+                totalBits: randomInput3.length,
+                onesCount: randomInput3.filter(bit => bit === 1).length,
+                zerosCount: randomInput3.filter(bit => bit === 0).length,
+                firstBytes: randomInput3.slice(0, 32).join('')
+            };
+            
+            console.log(`🎲 Generated 3 random inputs for account ${accountIndex + 1}:`);
+            console.log(`   Input A: ${inputSummary1.onesCount} ones, ${inputSummary1.zerosCount} zeros`);
+            console.log(`   Input B: ${inputSummary2.onesCount} ones, ${inputSummary2.zerosCount} zeros`);
+            console.log(`   Input C: ${inputSummary3.onesCount} ones, ${inputSummary3.zerosCount} zeros`);
+            
+            // 并行生成三个witness
+            const witnessStart = Date.now();
+            console.log(`🔧 [${new Date().toLocaleTimeString()}] [${batchId}] Triple witness generation phase for account ${accountIndex + 1}`);
+            
+            const [witness1, witness2, witness3] = await Promise.all([
+                this.generateWitnessWithSnarkjs(randomInput1, accountIndex * 3),     // 使用不同的temp文件
+                this.generateWitnessWithSnarkjs(randomInput2, accountIndex * 3 + 1), // 使用不同的temp文件
+                this.generateWitnessWithSnarkjs(randomInput3, accountIndex * 3 + 2)  // 使用不同的temp文件
+            ]);
+            
+            const witnessTime = Date.now() - witnessStart;
+            console.log(`✅ [${new Date().toLocaleTimeString()}] [${batchId}] Triple witness completed for account ${accountIndex + 1} (${witnessTime}ms)`);
+            
+            // 并行生成三个proof
+            const proofStart = Date.now();
+            console.log(`⚡ [${new Date().toLocaleTimeString()}] [${batchId}] Triple proof generation phase for account ${accountIndex + 1}`);
+            
+            const [proof1Result, proof2Result, proof3Result] = await Promise.all([
+                this.generateProofWithRapidsnark(accountIndex * 3),
+                this.generateProofWithRapidsnark(accountIndex * 3 + 1),
+                this.generateProofWithRapidsnark(accountIndex * 3 + 2)
+            ]);
+            
+            const proofTime = Date.now() - proofStart;
+            console.log(`✅ [${new Date().toLocaleTimeString()}] [${batchId}] Triple proof completed for account ${accountIndex + 1} (${proofTime}ms)`);
+            
+            // 立即提交第一个proof
+            const submitStart1 = Date.now();
+            console.log(`📤 [${new Date().toLocaleTimeString()}] [${batchId}] Proof A submission initiated for account ${accountIndex + 1} (immediate)`);
+            
+            const submitPromise1 = this.submitProof(proof1Result.proof, proof1Result.publicInputs, inputSummary1, accountAddress, accountIndex).then(() => {
+                const submitTime = Date.now() - submitStart1;
+                console.log(`✅ [${new Date().toLocaleTimeString()}] [${batchId}] Proof A submit completed for account ${accountIndex + 1} (${submitTime}ms)`);
+                return { accountIndex, proofType: 'A', success: true, submitTime };
+            }).catch((error) => {
+                const submitTime = Date.now() - submitStart1;
+                const errorMessage = error?.message || JSON.stringify(error) || error.toString();
+                console.log(`❌ [${new Date().toLocaleTimeString()}] [${batchId}] Proof A submit failed for account ${accountIndex + 1}: ${errorMessage}`);
+                return { accountIndex, proofType: 'A', success: false, error: errorMessage, submitTime };
+            });
+            
+            // 延迟5.5秒提交第二个proof
+            const submitStart2 = Date.now();
+            console.log(`📤 [${new Date().toLocaleTimeString()}] [${batchId}] Proof B submission scheduled for account ${accountIndex + 1} (+5.5s delay)`);
+            
+            const submitPromise2 = new Promise(async (resolve) => {
+                await new Promise(delay => setTimeout(delay, 5500)); // 5.5秒延迟
+                const actualSubmitStart = Date.now();
+                console.log(`📤 [${new Date().toLocaleTimeString()}] [${batchId}] Proof B submission initiated for account ${accountIndex + 1} (delayed)`);
+                
+                this.submitProof(proof2Result.proof, proof2Result.publicInputs, inputSummary2, accountAddress, accountIndex).then(() => {
+                    const submitTime = Date.now() - actualSubmitStart;
+                    console.log(`✅ [${new Date().toLocaleTimeString()}] [${batchId}] Proof B submit completed for account ${accountIndex + 1} (${submitTime}ms)`);
+                    resolve({ accountIndex, proofType: 'B', success: true, submitTime });
+                }).catch((error) => {
+                    const submitTime = Date.now() - actualSubmitStart;
+                    const errorMessage = error?.message || JSON.stringify(error) || error.toString();
+                    console.log(`❌ [${new Date().toLocaleTimeString()}] [${batchId}] Proof B submit failed for account ${accountIndex + 1}: ${errorMessage}`);
+                    resolve({ accountIndex, proofType: 'B', success: false, error: errorMessage, submitTime });
+                });
+            });
+            
+            // 延迟12秒提交第三个proof (5.5s + 6.5s = 12s)
+            const submitStart3 = Date.now();
+            console.log(`📤 [${new Date().toLocaleTimeString()}] [${batchId}] Proof C submission scheduled for account ${accountIndex + 1} (+12s delay)`);
+            
+            const submitPromise3 = new Promise(async (resolve) => {
+                await new Promise(delay => setTimeout(delay, 12000)); // 12秒延迟
+                const actualSubmitStart = Date.now();
+                console.log(`📤 [${new Date().toLocaleTimeString()}] [${batchId}] Proof C submission initiated for account ${accountIndex + 1} (delayed)`);
+                
+                this.submitProof(proof3Result.proof, proof3Result.publicInputs, inputSummary3, accountAddress, accountIndex).then(() => {
+                    const submitTime = Date.now() - actualSubmitStart;
+                    console.log(`✅ [${new Date().toLocaleTimeString()}] [${batchId}] Proof C submit completed for account ${accountIndex + 1} (${submitTime}ms)`);
+                    resolve({ accountIndex, proofType: 'C', success: true, submitTime });
+                }).catch((error) => {
+                    const submitTime = Date.now() - actualSubmitStart;
+                    const errorMessage = error?.message || JSON.stringify(error) || error.toString();
+                    console.log(`❌ [${new Date().toLocaleTimeString()}] [${batchId}] Proof C submit failed for account ${accountIndex + 1}: ${errorMessage}`);
+                    resolve({ accountIndex, proofType: 'C', success: false, error: errorMessage, submitTime });
+                });
+            });
+            
+            const proofGenerationTime = Date.now() - startTime;
+            console.log(`🚀 [${new Date().toLocaleTimeString()}] [${batchId}] Triple proof generation completed for account ${accountIndex + 1} (${proofGenerationTime}ms)`);
+            console.log(`⏱️ [${batchId}] Timing - Witness: ${witnessTime}ms, Proof: ${proofTime}ms, Total: ${proofGenerationTime}ms`);
+            console.log(`📋 [${batchId}] Submit schedule: Proof A (immediate), Proof B (+5.5s), Proof C (+12s)`);
+            
+            // 返回三个submit promises
+            return { submitPromises: [submitPromise1, submitPromise2, submitPromise3], accountIndex };
+            
+        } catch (error) {
+            this.stats.accountStats[accountAddress].failed += 3;
+            let errorMessage;
+            
+            try {
+                errorMessage = error?.message || JSON.stringify(error) || error.toString();
+            } catch (stringifyError) {
+                errorMessage = 'Unknown error occurred';
+            }
+            
+            console.error(`❌ Triple SHA256 proof cycle failed for account ${accountIndex + 1}: ${errorMessage}\n`);
             throw error;
         }
     }
     
     async runParallelProofCycles() {
         const cycleStartTime = Date.now();
-        console.log(`\n🚀 [${new Date().toLocaleTimeString()}] Starting staggered proof generation across ${this.derivedAccounts.length} accounts...`);
-        
-        const batchSize = Math.ceil(this.derivedAccounts.length / 2); // n/2
-        const batch1 = this.derivedAccounts.slice(0, batchSize);
-        const batch2 = this.derivedAccounts.slice(batchSize);
-        
-        console.log(`📊 [${new Date().toLocaleTimeString()}] Phase 1: Starting ${batch1.length} accounts`);
-        console.log(`📊 [${new Date().toLocaleTimeString()}] Phase 2: Will start ${batch2.length} accounts in 7.5 seconds (optimized timing)`);
+        console.log(`\n🚀 [${new Date().toLocaleTimeString()}] Starting full parallel proof generation across ${this.derivedAccounts.length} accounts...`);
         
         // Promise池管理 - 收集所有submit promises
         const submitPromises = [];
-        const proofResults = [];
         
-        // Phase 1: Start first batch
-        const batch1StartTime = Date.now();
-        const batch1Promises = batch1.map(async (accountAddress, index) => {
-            try {
-                const { submitPromise } = await this.runSingleProofCycleAsync(index, 'Phase1');
-                submitPromises.push({ accountIndex: index, promise: submitPromise });
-                this.stats.successful++;
-            } catch (error) {
-                this.stats.failed++;
-                // Error already logged in runSingleProofCycle
-            }
-        });
+        // 所有账户同时开始，不分batch
+        console.log(`📊 [${new Date().toLocaleTimeString()}] All ${this.derivedAccounts.length} accounts starting simultaneously`);
         
-        // Phase 2: Start second batch with optimized timing
-        const batch2Promises = batch2.map(async (accountAddress, index) => {
-            const actualIndex = index + batchSize;
+        const allProofPromises = this.derivedAccounts.map(async (accountAddress, index) => {
             try {
-                // 优化延迟: 基于实测数据
-                const witnessTime = 1800;  // 实测1.8s
-                const proofTime = 4600;    // 实测4.6s  
-                const submitTime = 3200;   // Phase1实测3.2s
-                const optimalDelay = witnessTime + proofTime + (submitTime / 3); // 7.5s
-                
-                await new Promise(resolve => setTimeout(resolve, optimalDelay)); 
-                console.log(`🔄 [${new Date().toLocaleTimeString()}] Phase 2: Starting account ${actualIndex + 1} (optimized timing)`);
-                const { submitPromise } = await this.runSingleProofCycleAsync(actualIndex, 'Phase2');
-                submitPromises.push({ accountIndex: actualIndex, promise: submitPromise });
-                this.stats.successful++;
+                if (index === 0) {
+                    // Account 1 uses triple proof strategy
+                    const { submitPromises: tripleSubmitPromises, accountIndex } = await this.runTripleProofCycleAsync(index, `Account1-Triple`);
+                    // 添加三个submit promises到监控池
+                    tripleSubmitPromises.forEach((promise, proofIndex) => {
+                        const proofTypes = ['A', 'B', 'C'];
+                        submitPromises.push({ 
+                            accountIndex, 
+                            promise, 
+                            proofType: proofTypes[proofIndex] 
+                        });
+                    });
+                } else {
+                    // Other accounts use single proof strategy
+                    const accountAddress = this.derivedAccounts[index];
+                    this.stats.accountStats[accountAddress].submitted++;
+                    
+                    const submitPromise = await this.runSingleProofCycleAsync(index, `Account${index+1}-Single`);
+                    submitPromises.push({ 
+                        accountIndex: index, 
+                        promise: submitPromise, 
+                        proofType: 'Single' 
+                    });
+                }
+                // Note: 成功统计在monitorAsyncSubmissions中处理
             } catch (error) {
-                this.stats.failed++;
-                // Error already logged in runSingleProofCycle
+                if (index === 0) {
+                    this.stats.failed += 3; // 三个proof都失败
+                } else {
+                    this.stats.failed += 1; // 一个proof失败
+                }
+                // Error already logged in respective cycle methods
             }
         });
         
         // Wait for all proof generation to complete (不等待submit)
-        console.log(`⚡ [${new Date().toLocaleTimeString()}] Waiting for proof generation to complete...`);
-        await Promise.all([...batch1Promises, ...batch2Promises]);
+        console.log(`⚡ [${new Date().toLocaleTimeString()}] Waiting for all ${this.derivedAccounts.length} proof generations to complete...`);
+        await Promise.all(allProofPromises);
         
         const proofGenerationEndTime = Date.now();
         const proofGenerationTime = proofGenerationEndTime - cycleStartTime;
@@ -712,14 +852,17 @@ class RapidsnarkSHA256Pipeline {
         const cycleEndTime = Date.now();
         const totalCycleTime = cycleEndTime - cycleStartTime;
         
-        this.stats.totalAttempts += this.derivedAccounts.length;
+        // Calculate total attempts: Account 1 = 3 proofs, others = 1 proof each
+        const totalAttemptsThisCycle = 3 + (this.derivedAccounts.length - 1);
+        this.stats.totalAttempts += totalAttemptsThisCycle;
         
         // Print summary statistics with timing (proof generation only)
-        console.log(`\n📊 [${new Date().toLocaleTimeString()}] Staggered parallel cycle completed (proof generation):`);
-        console.log(`   Total attempts this cycle: ${this.derivedAccounts.length}`);
+        console.log(`\n📊 [${new Date().toLocaleTimeString()}] Mixed parallel cycle completed (proof generation):`);
+        console.log(`   Account 1 (triple): 3 proofs, Accounts 2-${this.derivedAccounts.length} (single): ${this.derivedAccounts.length - 1} proofs`);
+        console.log(`   Total attempts this cycle: ${totalAttemptsThisCycle}`);
         console.log(`   Proof generation time: ${(proofGenerationTime/1000).toFixed(1)}s`);
         console.log(`   Submit monitoring: ${submitPromises.length} async submissions in progress`);
-        console.log(`   ⏱️ Cycle optimization: ~${((31700 - totalCycleTime)/1000).toFixed(1)}s faster than previous sync approach`);
+        console.log(`   ⚡ Mixed strategy: Account 1 triple proof + ${this.derivedAccounts.length - 1} single proof accounts`);
         
         // Update health server statistics
         this.healthServer.updateProofStats(this.stats.totalAttempts, this.stats.successful, this.stats.failed);
@@ -773,12 +916,22 @@ class RapidsnarkSHA256Pipeline {
             
             submitResults.forEach((result, index) => {
                 const accountIndex = submitPromises[index].accountIndex;
+                const accountAddress = this.derivedAccounts[accountIndex];
+                
                 if (result.status === 'fulfilled' && result.value.success) {
                     successfulSubmits++;
                     submitTimes.push(result.value.submitTime);
+                    // 更新账户级别的成功统计
+                    if (this.stats.accountStats[accountAddress]) {
+                        this.stats.accountStats[accountAddress].successful++;
+                    }
                 } else {
                     failedSubmits++;
                     console.log(`❌ Background submit failed for account ${accountIndex + 1}:`, result.reason || result.value?.error);
+                    // 更新账户级别的失败统计
+                    if (this.stats.accountStats[accountAddress]) {
+                        this.stats.accountStats[accountAddress].failed++;
+                    }
                 }
             });
             
@@ -801,7 +954,14 @@ class RapidsnarkSHA256Pipeline {
             console.log(`\n📈 Final Account Statistics:`);
             this.derivedAccounts.forEach((address, index) => {
                 const stats = this.stats.accountStats[address];
-                console.log(`   Account ${index + 1} (${address.slice(0, 8)}...): ${stats.successful}/${stats.submitted} successful (${stats.submitted > 0 ? ((stats.successful / stats.submitted) * 100).toFixed(1) : 0}%)`);
+                if (stats) {
+                    const successful = stats.successful || 0;
+                    const submitted = stats.submitted || 0;
+                    const successRate = submitted > 0 ? ((successful / submitted) * 100).toFixed(1) : 0;
+                    console.log(`   Account ${index + 1} (${address.slice(0, 8)}...): ${successful}/${submitted} successful (${successRate}%)`);
+                } else {
+                    console.log(`   Account ${index + 1} (${address.slice(0, 8)}...): No stats available`);
+                }
             });
             
         } catch (error) {
@@ -810,9 +970,9 @@ class RapidsnarkSHA256Pipeline {
     }
     
     async runContinuous(intervalSeconds = 30) {
-        console.log(`🔄 Starting continuous parallel SHA256 proof submission every ${intervalSeconds} seconds...`);
+        console.log(`🔄 Starting continuous mixed SHA256 proof submission every ${intervalSeconds} seconds...`);
         console.log(`🧮 Circuit: SHA256 (k≈20, 1,031,716 constraints, 16384-bit input)`);
-        console.log(`👥 Using ${this.derivedAccounts.length} parallel accounts`);
+        console.log(`👥 Mixed strategy: Account 1 (triple proof), Accounts 2-${this.derivedAccounts.length} (single proof)`);
         
         const runCycle = async () => {
             try {
