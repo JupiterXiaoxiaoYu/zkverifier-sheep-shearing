@@ -387,13 +387,14 @@ class RapidsnarkSHA256Pipeline {
         });
     }
     
-    async submitProof(proofData, publicInputs, mockInputSummary, accountAddress, accountIndex) {
+    async submitProof(proofData, publicInputs, mockInputSummary, accountAddress, accountIndex, proofType = '') {
         const maxRetries = 3;
         let retryCount = 0;
         
         while (retryCount < maxRetries) {
             try {
-                console.log(`🔢 Submitting proof from account ${accountIndex + 1} (${accountAddress.slice(0, 8)}...)...${retryCount > 0 ? ` (retry ${retryCount})` : ''}`);
+                const proofLabel = proofType ? ` ${proofType}` : '';
+                console.log(`🔢 Submitting proof${proofLabel} from account ${accountIndex + 1} (${accountAddress.slice(0, 8)}...)...${retryCount > 0 ? ` (retry ${retryCount})` : ''}`);
                 
                 // Submit to zkVerify with promise wrapper to catch async errors
                 const submissionPromise = new Promise(async (resolve, reject) => {
@@ -411,7 +412,7 @@ class RapidsnarkSHA256Pipeline {
 
                         // Handle submission events
                         events.on(ZkVerifyEvents.IncludedInBlock, (eventData) => {
-                            console.log(`✅ Proof from account ${accountIndex + 1} included in block:`, {
+                            console.log(`✅ Proof${proofLabel} from account ${accountIndex + 1} included in block:`, {
                                 account: `${accountAddress.slice(0, 8)}...`,
                                 statement: eventData.statement,
                                 aggregationId: eventData.aggregationId,
@@ -469,13 +470,14 @@ class RapidsnarkSHA256Pipeline {
                 
             } catch (error) {
                 retryCount++;
+                const proofLabel = proofType ? ` ${proofType}` : '';
                 let errorMessage = 'Unknown error';
                 if (error && typeof error === 'object') {
                     errorMessage = error.message || JSON.stringify(error) || error.toString();
                 } else if (error) {
                     errorMessage = error.toString();
                 }
-                console.error(`❌ Error submitting proof #${this.stats.totalAttempts} (attempt ${retryCount}):`, errorMessage);
+                console.error(`❌ Error submitting proof${proofLabel} #${this.stats.totalAttempts} from account ${accountIndex + 1} (attempt ${retryCount}):`, errorMessage);
                 
                 // Check for specific errors that should trigger retry
                 const shouldRetry = 
@@ -505,7 +507,7 @@ class RapidsnarkSHA256Pipeline {
                 } else {
                     // Either not a retryable error or max retries reached
                     if (retryCount >= maxRetries) {
-                        console.error(`❌ Max retries (${maxRetries}) reached for proof #${this.stats.totalAttempts}`);
+                        console.error(`❌ Max retries (${maxRetries}) reached for proof${proofLabel} #${this.stats.totalAttempts} from account ${accountIndex + 1}`);
                     }
                     // Don't throw error, just log and continue with next proof
                     break;
@@ -550,7 +552,7 @@ class RapidsnarkSHA256Pipeline {
             // Step 4: Submit proof to zkVerify
             const submitStart = Date.now();
             console.log(`📤 [${new Date().toLocaleTimeString()}] [${batchId}] Proof submission phase for account ${accountIndex + 1}`);
-            await this.submitProof(proof, publicInputs, inputSummary, accountAddress, accountIndex);
+            await this.submitProof(proof, publicInputs, inputSummary, accountAddress, accountIndex, 'Single');
             const submitTime = Date.now() - submitStart;
             const totalTime = Date.now() - startTime;
             
@@ -612,7 +614,7 @@ class RapidsnarkSHA256Pipeline {
             const submitStart = Date.now();
             console.log(`📤 [${new Date().toLocaleTimeString()}] [${batchId}] Proof submission initiated for account ${accountIndex + 1}`);
             
-            const submitPromise = this.submitProof(proof, publicInputs, inputSummary, accountAddress, accountIndex).then(() => {
+            const submitPromise = this.submitProof(proof, publicInputs, inputSummary, accountAddress, accountIndex, 'Single').then(() => {
                 const submitTime = Date.now() - submitStart;
                 console.log(`✅ [${new Date().toLocaleTimeString()}] [${batchId}] Proof submit completed for account ${accountIndex + 1} (${submitTime}ms)`);
                 return { accountIndex, proofType: 'Single', success: true, submitTime };
@@ -713,7 +715,7 @@ class RapidsnarkSHA256Pipeline {
             const submitStart1 = Date.now();
             console.log(`📤 [${new Date().toLocaleTimeString()}] [${batchId}] Proof A submission initiated for account ${accountIndex + 1} (immediate)`);
             
-            const submitPromise1 = this.submitProof(proof1Result.proof, proof1Result.publicInputs, inputSummary1, accountAddress, accountIndex).then(() => {
+            const submitPromise1 = this.submitProof(proof1Result.proof, proof1Result.publicInputs, inputSummary1, accountAddress, accountIndex, 'A').then(() => {
                 const submitTime = Date.now() - submitStart1;
                 console.log(`✅ [${new Date().toLocaleTimeString()}] [${batchId}] Proof A submit completed for account ${accountIndex + 1} (${submitTime}ms)`);
                 return { accountIndex, proofType: 'A', success: true, submitTime };
@@ -724,16 +726,16 @@ class RapidsnarkSHA256Pipeline {
                 return { accountIndex, proofType: 'A', success: false, error: errorMessage, submitTime };
             });
             
-            // 延迟5.5秒提交第二个proof
+            // 延迟7秒提交第二个proof
             const submitStart2 = Date.now();
-            console.log(`📤 [${new Date().toLocaleTimeString()}] [${batchId}] Proof B submission scheduled for account ${accountIndex + 1} (+5.5s delay)`);
+            console.log(`📤 [${new Date().toLocaleTimeString()}] [${batchId}] Proof B submission scheduled for account ${accountIndex + 1} (+7s delay)`);
             
             const submitPromise2 = new Promise(async (resolve) => {
-                await new Promise(delay => setTimeout(delay, 5500)); // 5.5秒延迟
+                await new Promise(delay => setTimeout(delay, 7000)); // 7秒延迟
                 const actualSubmitStart = Date.now();
                 console.log(`📤 [${new Date().toLocaleTimeString()}] [${batchId}] Proof B submission initiated for account ${accountIndex + 1} (delayed)`);
                 
-                this.submitProof(proof2Result.proof, proof2Result.publicInputs, inputSummary2, accountAddress, accountIndex).then(() => {
+                this.submitProof(proof2Result.proof, proof2Result.publicInputs, inputSummary2, accountAddress, accountIndex, 'B').then(() => {
                     const submitTime = Date.now() - actualSubmitStart;
                     console.log(`✅ [${new Date().toLocaleTimeString()}] [${batchId}] Proof B submit completed for account ${accountIndex + 1} (${submitTime}ms)`);
                     resolve({ accountIndex, proofType: 'B', success: true, submitTime });
@@ -745,16 +747,16 @@ class RapidsnarkSHA256Pipeline {
                 });
             });
             
-            // 延迟12秒提交第三个proof (5.5s + 6.5s = 12s)
+            // 延迟13秒提交第三个proof  
             const submitStart3 = Date.now();
-            console.log(`📤 [${new Date().toLocaleTimeString()}] [${batchId}] Proof C submission scheduled for account ${accountIndex + 1} (+12s delay)`);
+            console.log(`📤 [${new Date().toLocaleTimeString()}] [${batchId}] Proof C submission scheduled for account ${accountIndex + 1} (+13s delay)`);
             
             const submitPromise3 = new Promise(async (resolve) => {
-                await new Promise(delay => setTimeout(delay, 12000)); // 12秒延迟
+                await new Promise(delay => setTimeout(delay, 13000)); // 13秒延迟
                 const actualSubmitStart = Date.now();
                 console.log(`📤 [${new Date().toLocaleTimeString()}] [${batchId}] Proof C submission initiated for account ${accountIndex + 1} (delayed)`);
                 
-                this.submitProof(proof3Result.proof, proof3Result.publicInputs, inputSummary3, accountAddress, accountIndex).then(() => {
+                this.submitProof(proof3Result.proof, proof3Result.publicInputs, inputSummary3, accountAddress, accountIndex, 'C').then(() => {
                     const submitTime = Date.now() - actualSubmitStart;
                     console.log(`✅ [${new Date().toLocaleTimeString()}] [${batchId}] Proof C submit completed for account ${accountIndex + 1} (${submitTime}ms)`);
                     resolve({ accountIndex, proofType: 'C', success: true, submitTime });
@@ -769,7 +771,7 @@ class RapidsnarkSHA256Pipeline {
             const proofGenerationTime = Date.now() - startTime;
             console.log(`🚀 [${new Date().toLocaleTimeString()}] [${batchId}] Triple proof generation completed for account ${accountIndex + 1} (${proofGenerationTime}ms)`);
             console.log(`⏱️ [${batchId}] Timing - Witness: ${witnessTime}ms, Proof: ${proofTime}ms, Total: ${proofGenerationTime}ms`);
-            console.log(`📋 [${batchId}] Submit schedule: Proof A (immediate), Proof B (+5.5s), Proof C (+12s)`);
+            console.log(`📋 [${batchId}] Submit schedule: Proof A (immediate), Proof B (+7s), Proof C (+13s)`);
             
             // 返回三个submit promises
             return { submitPromises: [submitPromise1, submitPromise2, submitPromise3], accountIndex };
